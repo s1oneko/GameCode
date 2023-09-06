@@ -1,8 +1,7 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 
-#include "DebugWidget.h"
-
+#include "RPG/UI/Widget/DebugWidget.h"
 #include "Blueprint/WidgetLayoutLibrary.h"
 #include "Components/TextBlock.h"
 #include "Kismet/GameplayStatics.h"
@@ -10,128 +9,87 @@
 
 UDebugWidget::UDebugWidget(const FObjectInitializer& ObjectInitializer):Super(ObjectInitializer)
 {
-}
-
-void UDebugWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
-{
-	Super::NativeTick(MyGeometry, InDeltaTime);
-	if (!bCanTick)
-	{
-		return;
-	}
-	//SetLocation();
-	SetRelativeLocation();
+	
 }
 
 
-void UDebugWidget::RPGDebugLog(FVector2D ScreenLocation, FString DebugContent, AActor* Target, FColor DebugColor,
-                               float FontSize, float Duration)
+
+void UDebugWidget::NativeOnInitialized()
 {
-	if (UWorld* World = Target->GetWorld())
-	{
-		if (UDebugWidget* DebugWid = CreateWidget<UDebugWidget>(World,DebugWidgetBP))
-		{
-			
-			DebugWid->AttachedActor = Target;
-			DebugWid->ScreenOffset = ScreenLocation;
-			DebugWid->SetLocation();
-			DebugWid->AddToViewport();
-			DebugWid->bCanTick = true;
-			
-			if(UTextBlock* DebugText=DebugWid->DebugTextBlock)
-			{
-				const FString Content = Target->GetName() + ": " +DebugContent;
-				DebugText->SetText(FText::FromString(Content));
-				DebugText->SetColorAndOpacity(DebugColor);
-				DebugText->SetFont(FSlateFontInfo(DebugText->GetFont().FontObject, FontSize));
-			}
-			
-			
-			World->GetTimerManager().SetTimer(DebugWid->HideTimerHandle, [DebugWid]
-			{
-				DebugWid->SetVisibility(ESlateVisibility::Hidden);
-				DebugWid->RemoveFromParent();
-			}, Duration, false);
-		}
-	}
+	Super::NativeOnInitialized();
+
+	if(!IsValid(DebugLogTicker))
+		DebugLogTicker = NewObject<UDebugLogTicker>(this);
+
+	DebugLogTicker->GetDebugLogOnTick().AddDynamic(this,&UDebugWidget::SetLocation);
+	DebugLogTicker->GetDebugOnEnd().AddDynamic(this, &UDebugWidget::OnEnd);
 }
 
-void UDebugWidget::RPGDebugLog(FVector RelativeLocation, FString DebugContent, AActor* Target, FColor DebugColor,
-	float FontSize, float Duration)
+void UDebugWidget::NativeDestruct()
 {
-	if (UWorld* World = Target->GetWorld())
+	DebugLogTicker->GetDebugLogOnTick().RemoveDynamic(this, &UDebugWidget::SetLocation);
+	DebugLogTicker->GetDebugOnEnd().RemoveDynamic(this, &UDebugWidget::OnEnd);
+	
+	Super::NativeDestruct();
+}
+
+void UDebugWidget::OnEnd()
+{
+	RemoveFromParent();
+}
+
+void UDebugWidget::ConfigSetting(FVector2D screenLocation, FString debugContent, AActor* target,
+	FColor debugColor, float fontSize, float duration)
+{
+	ScreenLocation = screenLocation;
+	bIs2D = true;
+	
+	SetLocation();
+	DebugLogTicker->SetElapsedTimeMax(duration);
+	
+	if(DebugTextBlock)
 	{
-		if (UDebugWidget* DebugWid = CreateWidget<UDebugWidget>(World,DebugWidgetBP))
-		{
-			
-			DebugWid->AttachedActor = Target;
-			//DebugWid->CalculateOffset(RelativeLocation);
-			//DebugWid->SetLocation();
-			DebugWid->RelativeOffset=RelativeLocation;
-			DebugWid->SetRelativeLocation();
-			DebugWid->AddToViewport();
-			DebugWid->bCanTick = true;
-			
-			if(UTextBlock* DebugText=DebugWid->DebugTextBlock)
-			{
-				const FString Content = Target->GetName() + ": " +DebugContent;
-				DebugText->SetText(FText::FromString(Content));
-				DebugText->SetColorAndOpacity(DebugColor);
-				DebugText->SetFont(FSlateFontInfo(DebugText->GetFont().FontObject, FontSize));
-			}
-			
-			
-			
-			World->GetTimerManager().SetTimer(DebugWid->HideTimerHandle, [DebugWid]
-			{
-				DebugWid->SetVisibility(ESlateVisibility::Hidden);
-				DebugWid->RemoveFromParent();
-			}, Duration, false);
-		}
+		const FString Content = target->GetName() + ": " +debugContent;
+		DebugTextBlock->SetText(FText::FromString(Content));
+		DebugTextBlock->SetColorAndOpacity(debugColor);
+		DebugTextBlock->SetFont(FSlateFontInfo(DebugTextBlock->GetFont().FontObject, fontSize));
 	}
 }
 
-void UDebugWidget::RPGDebugLogScreen(FVector2D ScreenLocation, FString DebugContent, AActor* Target, FColor DebugColor,
-                                     float FontSize, float Duration)
-{
-	RPGDebugLog(ScreenLocation, DebugContent, Target, DebugColor, FontSize, Duration);
-}
 
-void UDebugWidget::RPGDebugLogWorld(FVector RelativeLocation, FString DebugContent, AActor* Target, FColor DebugColor,
-	float FontSize, float Duration)
+void UDebugWidget::ConfigSetting(FVector worldLocation, FString debugContent, AActor* target,
+	FColor debugColor, float fontSize, float duration)
 {
-	RPGDebugLog(RelativeLocation, DebugContent, Target, DebugColor, FontSize, Duration);
+	WorldLocation = worldLocation;
+	bIs2D = false;
+	
+	SetLocation();
+	DebugLogTicker->SetElapsedTimeMax(duration);
+
+	if(DebugTextBlock)
+	{
+		const FString Content = target->GetName() + ": " +debugContent;
+		DebugTextBlock->SetText(FText::FromString(Content));
+		DebugTextBlock->SetColorAndOpacity(debugColor);
+		DebugTextBlock->SetFont(FSlateFontInfo(DebugTextBlock->GetFont().FontObject, fontSize));
+	}
 }
 
 void UDebugWidget::SetLocation()
 {
-	FVector2D ScreenLocation;
-	if (UGameplayStatics::ProjectWorldToScreen(GetOwningPlayer(), AttachedActor->GetActorLocation(), ScreenLocation))
+	if(bIs2D)
 	{
-		float Scale = UWidgetLayoutLibrary::GetViewportScale(this);
-		ScreenLocation=(ScreenLocation+ScreenOffset)/Scale;
 		SetPositionInViewport(ScreenLocation, false);
+		return;
+	}
+	FVector2D screenLocation;
+	float scale = UWidgetLayoutLibrary::GetViewportScale(this);
+	if (UGameplayStatics::ProjectWorldToScreen(GetOwningPlayer(), WorldLocation, screenLocation))
+	{
+		screenLocation /= scale;
+		SetPositionInViewport(screenLocation, false);
 	}
 }
 
-void UDebugWidget::SetRelativeLocation()
-{
-	FVector2D ScreenLocation;
-	if (UGameplayStatics::ProjectWorldToScreen(GetOwningPlayer(), AttachedActor->GetActorLocation()+RelativeOffset, ScreenLocation))
-	{
-		float Scale = UWidgetLayoutLibrary::GetViewportScale(this);
-		ScreenLocation/= Scale;
-		SetPositionInViewport(ScreenLocation, false);
-	}
-}
-
-void UDebugWidget::CalculateOffset(FVector Offset)
-{
-	FVector2D LocationWithOffset;
-	UGameplayStatics::ProjectWorldToScreen(GetOwningPlayer(), AttachedActor->GetActorLocation()+Offset, LocationWithOffset);
-	FVector2D PivotLocation;
-	UGameplayStatics::ProjectWorldToScreen(GetOwningPlayer(), AttachedActor->GetActorLocation(), PivotLocation);
-	ScreenOffset=LocationWithOffset-PivotLocation;
-}
 
 
